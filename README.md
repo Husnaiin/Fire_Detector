@@ -16,6 +16,30 @@ A single-class fire detector trained, exported and quantization-prepared for rea
 
 ---
 
+## Contents
+
+- [Overview](#overview)
+- [Key characteristics](#key-characteristics)
+- [Runtime architecture](#runtime-architecture)
+- [Design constraints](#design-constraints)
+- [Dataset](#dataset)
+- [Training](#training)
+- [Results](#results)
+- [Export and quantization](#export-and-quantization)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Deploying to the drone](#deploying-to-the-drone)
+- [Troubleshooting](#troubleshooting)
+- [Repository contents](#repository-contents)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Citation](#citation)
+- [Related repositories](#related-repositories)
+- [License](#license)
+
+---
+
 ## Overview
 
 This is the perception component of a flying robot, and every decision in it was forced by that fact.
@@ -193,11 +217,91 @@ Trained artifacts are not committed. They are produced by the notebook and deplo
 
 ---
 
-## Reproducing
+## Requirements
 
-Open the notebook in Google Colab with a GPU runtime, place the Roboflow dataset in the expected Drive location with its training and validation splits, and run all cells. The notebook mounts storage, retrieves the YOLOv5 framework, rewrites the dataset configuration paths, trains for 80 epochs at 320 x 320, saves the weights back to Drive, exports the ONNX graph, and runs sample detections.
+**To train.** A CUDA-capable GPU, or a Google Colab session with a GPU runtime, which is what the notebook was built against. Python 3.9 or newer and the Ultralytics YOLOv5 framework with its dependencies. Training the full 80 epochs takes well under an hour on an entry-level cloud GPU, so no local accelerator is necessary.
 
-The same sequence runs locally against a CUDA-capable device with the YOLOv5 framework installed.
+**To run inference.** Python 3.9 or newer, ONNX Runtime, OpenCV and NumPy. No GPU, no PyTorch and no training framework are required — that is the point of the exported graph.
+
+**To deploy.** A Raspberry Pi 4B running a 64-bit OS, a depth camera, and the [Guardian](https://github.com/Husnaiin/Guardian) backend.
+
+---
+
+## Installation
+
+Retrieve the training framework and its dependencies:
+
+    git clone https://github.com/ultralytics/yolov5.git
+    cd yolov5
+    pip install -r requirements.txt
+
+For inference only, the runtime dependencies are considerably lighter:
+
+    pip install onnxruntime opencv-python numpy
+
+---
+
+## Usage
+
+### Training
+
+Place the dataset so that it contains `train/` and `valid/` splits alongside a `data.yaml` describing them, then train from COCO-pretrained nano weights at deployment resolution:
+
+    python train.py --img 320 --batch 16 --epochs 80 \
+        --data /path/to/fire_data/data.yaml \
+        --weights yolov5n.pt --cache --device 0
+
+Weights are written to `runs/train/exp/weights/`, with `best.pt` selected on validation performance.
+
+### Exporting for the edge
+
+Compile the checkpoint into a frozen, static-shape graph. The export resolution must match the training resolution:
+
+    python export.py --weights runs/train/exp/weights/best.pt \
+        --img 320 --batch 1 --include onnx
+
+### Running detection
+
+Against a single image, a directory, a video file or an attached camera:
+
+    python detect.py --weights runs/train/exp/weights/best.onnx \
+        --img 320 --conf 0.5 --source path/to/image.jpg
+
+### Evaluating
+
+To reproduce the reported metrics, or to validate a quantized graph before it flies:
+
+    python val.py --weights runs/train/exp/weights/best.onnx \
+        --data /path/to/fire_data/data.yaml --img 320 --task val
+
+### Using the notebook
+
+Open `fire_detector_training.ipynb` in Google Colab, select a GPU runtime, place the dataset in the expected Drive location and run all cells. The notebook covers the entire sequence above — mounting storage, retrieving the framework, rewriting dataset paths, training, saving weights back to Drive, exporting, and running sample detections.
+
+---
+
+## Deploying to the drone
+
+Copy the exported graph to the model path the [Guardian](https://github.com/Husnaiin/Guardian) backend expects:
+
+    scp best.onnx guardian@<pi-address>:/home/guardian/Desktop/capture_depth/fire_model/best.onnx
+
+Install the inference runtime on the Pi, then launch the onboard stack with detection enabled. The backend selects ONNX Runtime automatically when the model path ends in `.onnx`, and falls back to the training framework for a `.pt` file during bench development. Inference rate, confidence threshold and input size are all configurable at launch; the full option set is documented in the Guardian repository.
+
+The inference rate is the parameter to treat with care. It governs how much of the processor the detector consumes, and raising it spends headroom the navigation loop depends on.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause and resolution |
+|---|---|
+| Detections vanish after export | Export resolution does not match the resolution used at inference. Both must be 320. |
+| Inference runs but nothing is ever detected | The confidence floor is above the model's operating range for the scene. Lower it to inspect raw behaviour, then raise it back for deployment. |
+| Boxes land in the wrong place | Coordinates are being read without rescaling from the model's fixed input back to native frame dimensions. |
+| Inference far slower than expected on the Pi | A GPU execution provider is being requested where none exists, or thread count is oversubscribed against the navigation pipeline. |
+| Navigation degrades once detection is enabled | The inference rate is set too high. It is a load governor, not a quality setting. |
+| Accuracy drops sharply after quantization | Calibration data does not reflect the deployment distribution. Calibrate on frames from the drone's own camera. |
 
 ---
 
@@ -210,6 +314,30 @@ The same sequence runs locally against a CUDA-capable device with the YOLOv5 fra
 - Add a smoke class as an early-warning signal, since smoke is visible before flame from altitude
 - Fuse detections with the odometry pose to emit geolocated fire coordinates rather than image-space boxes
 - Evaluate alternative execution providers against the ONNX Runtime CPU baseline
+
+---
+
+## Contributing
+
+Contributions are welcome, particularly around recall on aerial imagery and on-device benchmarking, which are the two areas where this model has the most room to improve.
+
+Open an issue before starting substantial work so the approach can be discussed first. For changes that affect the model itself, include the validation metrics before and after alongside the training configuration used, since a change that improves mean average precision while reducing precision is not an improvement for this application. For changes to the deployment path, note the effect on inference latency and model size — both are constrained by the target hardware rather than by preference.
+
+---
+
+## Citation
+
+If this work is useful in your research, please cite the project:
+
+    @software{guardian_fire_detector,
+      author = {Husnain},
+      title  = {Fire_Detector: Edge-optimized fire detection for the
+                Guardian autonomous firefighting drone},
+      year   = {2025},
+      url    = {https://github.com/Husnaiin/Fire_Detector}
+    }
+
+Please also cite [Ultralytics YOLOv5](https://github.com/ultralytics/yolov5) and the [underlying dataset](https://universe.roboflow.com/aj-garcia-736tc/fire-dataset-for-yolov8/dataset/10), on which this model depends.
 
 ---
 
