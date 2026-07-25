@@ -1,0 +1,28 @@
+# Model artifacts (produced by the notebook, deployed to the Pi)
+*.pt
+*.onnx
+*.onnx.data
+*.tflite
+*.engine
+
+# Datasets
+fire_data/
+calib_frames/
+datasets/
+
+# YOLOv5 working tree / run outputs
+yolov5/
+runs/
+wandb/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
